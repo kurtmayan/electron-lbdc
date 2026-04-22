@@ -1,0 +1,6 @@
+[submodule "client"]
+	path = client
+	url = https://github.com/ItsYahBoiLaurence/local-biometric-data-consolidator-client.git
+[submodule "server"]
+	path = server
+	url = https://github.com/kurtmayan/lbdc.git
