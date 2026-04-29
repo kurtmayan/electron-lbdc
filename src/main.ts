@@ -15,9 +15,61 @@ const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
 
 /**
+ * Check if users and biometric devices already exist in the database
+ */
+async function checkDatabaseSetup(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const pythonScript = `
+import sys
+sys.path.insert(0, '${path.join(app.getAppPath(), "server").replace(/\\/g, "\\\\")}')
+
+try:
+    from app.core.database import SessionLocal
+    from app.core.models import BiometricInformation, User
+    
+    db = SessionLocal()
+    user_exists = db.query(User).first() is not None
+    biometric_exists = db.query(BiometricInformation).first() is not None
+    db.close()
+    
+    if user_exists and biometric_exists:
+        print('READY')
+    else:
+        print('SETUP_NEEDED')
+except Exception as e:
+    print('ERROR')
+`;
+
+    const python = spawn("python", ["-c", pythonScript], {
+      cwd: path.join(app.getAppPath(), "server"),
+    });
+
+    let output = "";
+
+    python.stdout.on("data", (data) => {
+      output += data.toString().trim();
+    });
+
+    python.on("close", (code) => {
+      resolve(output.includes("READY"));
+    });
+
+    python.on("error", () => {
+      resolve(false);
+    });
+
+    // Timeout after 5 seconds
+    setTimeout(() => {
+      python.kill();
+      resolve(false);
+    }, 5000);
+  });
+}
+
+/**
  * STEP 1: start FastAPI backend ONLY
  */
-function startBackend() {
+function startBackend(showWindow: boolean = true) {
   console.log("==============================");
   console.log("STEP 1: Starting backend...");
 
@@ -29,18 +81,35 @@ function startBackend() {
 
   console.log("Backend path:", exePath);
   console.log("File exists:", fs.existsSync(exePath));
+  console.log("Show window:", showWindow);
 
   if (!fs.existsSync(exePath)) {
     throw new Error(`Backend EXE not found: ${exePath}`);
   }
 
-  backendProcess = spawn("cmd.exe", ["/c", "start", "cmd.exe", "/k", exePath], {
-    cwd: path.dirname(exePath),
-    shell: false,
-  });
+  if (showWindow) {
+    // Show terminal window for setup
+    backendProcess = spawn(
+      "cmd.exe",
+      ["/c", "start", "cmd.exe", "/k", exePath],
+      {
+        cwd: path.dirname(exePath),
+        shell: false,
+      },
+    );
+  } else {
+    // Run backend silently in background using start /b (Windows detached process)
+    backendProcess = spawn("cmd.exe", ["/c", "start", "/b", exePath], {
+      cwd: path.dirname(exePath),
+      detached: true,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    backendProcess?.unref();
+  }
 
-  backendProcess.on("error", (err) => console.error("❌ Backend error:", err));
-  backendProcess.on("exit", (code) => console.log("⚠️ Backend exited:", code));
+  backendProcess?.on("error", (err) => console.error("❌ Backend error:", err));
+  backendProcess?.on("exit", (code) => console.log("⚠️ Backend exited:", code));
 
   console.log("STEP 1 DONE");
 }
@@ -137,9 +206,22 @@ function createWindow() {
  */
 async function boot() {
   try {
-    startBackend();
+    // Check if database is already set up
+    const isReady = await checkDatabaseSetup();
+
+    if (!isReady) {
+      // Setup needed - show terminal with CLI
+      console.log("Database setup needed - showing CLI terminal");
+      startBackend(true);
+      await waitForPort(BACKEND_PORT);
+    } else {
+      // Setup already complete - run backend silently
+      console.log("✔ Database already set up, starting backend silently");
+      startBackend(false);
+      await waitForPort(BACKEND_PORT);
+    }
+
     startFrontend();
-    await waitForPort(BACKEND_PORT);
     await waitForPort(FRONTEND_PORT);
     createWindow();
   } catch (err) {
@@ -164,11 +246,17 @@ function killAll() {
   }
 
   if (backendProcess?.pid) {
-    exec(`taskkill /PID ${backendProcess.pid} /T /F`);
+    try {
+      exec(`taskkill /PID ${backendProcess.pid} /T /F`);
+    } catch {
+      // Process might already be dead
+    }
     backendProcess = null;
   }
 
-  exec(`taskkill /IM main.exe /T /F`);
+  // Also kill any lbdc_server processes
+  exec(`taskkill /IM lbdc_server.exe /T /F 2>nul`, { shell: "cmd.exe" });
+  exec(`taskkill /IM main.exe /T /F 2>nul`, { shell: "cmd.exe" });
 }
 
 app.on("window-all-closed", () => {
