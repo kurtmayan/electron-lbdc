@@ -98,12 +98,13 @@ function startBackend(showWindow: boolean = true) {
       },
     );
   } else {
-    // Run backend silently in background using start /b (Windows detached process)
-    backendProcess = spawn("cmd.exe", ["/c", "start", "/b", exePath], {
+    // Run backend silently in background - spawn directly without cmd.exe wrapper
+    backendProcess = spawn(exePath, [], {
       cwd: path.dirname(exePath),
       detached: true,
       windowsHide: true,
       stdio: "ignore",
+      shell: false,
     });
     backendProcess?.unref();
   }
@@ -210,9 +211,9 @@ async function boot() {
     const isReady = await checkDatabaseSetup();
 
     if (!isReady) {
-      // Setup needed - show terminal with CLI
-      console.log("Database setup needed - showing CLI terminal");
-      startBackend(true);
+      // Setup needed - run backend in background
+      console.log("Database setup needed - starting backend in background");
+      startBackend(false);
       await waitForPort(BACKEND_PORT);
     } else {
       // Setup already complete - run backend silently
