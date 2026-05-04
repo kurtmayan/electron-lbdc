@@ -1,7 +1,6 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
-import started from "electron-squirrel-startup";
-import { spawn, ChildProcess, exec, spawnSync } from "child_process";
+import { spawn, ChildProcess, spawnSync } from "child_process";
 import fs from "fs";
 import express from "express";
 import { Server } from "http";
@@ -90,11 +89,12 @@ function startBackend(showWindow = true) {
   console.log("==============================");
   console.log("STEP 1: Starting backend...");
 
-  const exePath = fs.existsSync(
-    path.join(process.resourcesPath, "lbdc_server.exe"),
-  )
-    ? path.join(process.resourcesPath, "lbdc_server.exe")
-    : path.join(app.getAppPath(), "server/dist/lbdc_server.exe");
+  // With electron-builder extraResources, files are copied as-is:
+  // - server/dist/lbdc_server.exe -> resources/server/dist/lbdc_server.exe
+  // - client/dist -> resources/client/dist
+  const exePath = app.isPackaged
+    ? path.join(process.resourcesPath, "server", "dist", "lbdc_server.exe")
+    : path.join(app.getAppPath(), "server", "dist", "lbdc_server.exe");
 
   console.log("Backend path:", exePath);
   console.log("File exists:", fs.existsSync(exePath));
@@ -104,20 +104,43 @@ function startBackend(showWindow = true) {
     throw new Error(`Backend EXE not found: ${exePath}`);
   }
 
+  // Create AppData directory for database (writable location)
+  const appDataDir = path.join(app.getPath("userData"), "data");
+  if (!fs.existsSync(appDataDir)) {
+    fs.mkdirSync(appDataDir, { recursive: true });
+  }
+
+  // Copy .env file to AppData so server can read it
+  const envSource = app.isPackaged
+    ? path.join(process.resourcesPath, "server", ".env")
+    : path.join(app.getAppPath(), "server", ".env");
+  const envDest = path.join(appDataDir, ".env");
+
+  try {
+    if (fs.existsSync(envSource)) {
+      fs.copyFileSync(envSource, envDest);
+      console.log("Copied .env to:", envDest);
+    }
+  } catch (err) {
+    console.error("Failed to copy .env:", err);
+  }
+
+  console.log("Server working directory:", appDataDir);
+
   if (showWindow) {
     // Show terminal window for setup
     backendProcess = spawn(
       "cmd.exe",
       ["/c", "start", "cmd.exe", "/k", exePath],
       {
-        cwd: path.dirname(exePath),
+        cwd: appDataDir,
         shell: false,
       },
     );
   } else {
     // Run backend silently in background - spawn directly without cmd.exe wrapper
     backendProcess = spawn(exePath, [], {
-      cwd: path.dirname(exePath),
+      cwd: appDataDir,
       detached: false, // Set to false so we can properly terminate it
       windowsHide: true,
       stdio: "ignore",
@@ -143,9 +166,10 @@ function startFrontend() {
   console.log("==============================");
   console.log("STEP 2: Starting frontend...");
 
+  // extraResources copies client/dist to resources/client/dist
   const distPath = app.isPackaged
-    ? path.join(process.resourcesPath, "dist") // ✅ matches extraResource output
-    : path.join(app.getAppPath(), "./client/dist");
+    ? path.join(process.resourcesPath, "client", "dist")
+    : path.join(app.getAppPath(), "client", "dist");
 
   console.log("Frontend dist path:", distPath);
 
@@ -248,26 +272,7 @@ async function boot() {
   }
 }
 
-if (started) {
-  console.log("Running under Squirrel installer, cleaning up...");
-  // Kill any existing backend processes
-  killExistingBackend();
-  // Exit immediately
-  setTimeout(() => {
-    process.exit(0);
-  }, 100);
-}
-
 app.on("ready", () => {
-  // Double check - if running under installer, don't boot the app
-  if (started) {
-    console.log(
-      "Installer mode detected in ready event, cleaning up and exiting...",
-    );
-    killExistingBackend();
-    process.exit(0);
-    return;
-  }
   boot();
 });
 

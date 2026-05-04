@@ -19,7 +19,8 @@
     "package": "npm run build:all && electron-forge package",
     "publish": "electron-forge publish",
     "lint": "eslint --ext .ts,.tsx .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build": "electron-builder"
   },
   "keywords": [],
   "author": {
@@ -42,6 +43,7 @@
     "@typescript-eslint/eslint-plugin": "^5.62.0",
     "@typescript-eslint/parser": "^5.62.0",
     "electron": "41.2.1",
+    "electron-builder": "^26.8.1",
     "eslint": "^8.57.1",
     "eslint-plugin-import": "^2.32.0",
     "typescript": "~4.5.4",
@@ -49,7 +51,45 @@
   },
   "dependencies": {
     "electron-squirrel-startup": "^1.0.1",
+    "electron-updater": "^6.8.3",
     "express": "^5.2.1",
     "serve": "^14.2.6"
+  },
+  "build": {
+    "appId": "com.chronos.app",
+    "productName": "Mr. DIY - LOCAL",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      ".vite/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "server/dist/lbdc_server.exe",
+        "to": "server/dist/lbdc_server.exe"
+      },
+      {
+        "from": "server/dist/.env",
+        "to": "server/dist/.env"
+      },
+      {
+        "from": "client/dist",
+        "to": "client/dist"
+      }
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "resources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "runAfterFinish": true
+    }
   }
 }
