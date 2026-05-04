@@ -1,7 +1,7 @@
 import { app, BrowserWindow } from "electron";
 import path from "node:path";
 import started from "electron-squirrel-startup";
-import { spawn, ChildProcess, exec } from "child_process";
+import { spawn, ChildProcess, exec, spawnSync } from "child_process";
 import fs from "fs";
 import express from "express";
 import { Server } from "http";
@@ -10,9 +10,26 @@ let expressServer: Server | null = null;
 
 let backendProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
+let isShuttingDown = false; // Flag to prevent multiple shutdown calls
 
 const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
+
+/**
+ * Kill any existing backend processes (for cleanup)
+ */
+function killExistingBackend() {
+  try {
+    spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
+      shell: false,
+      stdio: "ignore",
+      timeout: 2000,
+      windowsHide: true,
+    });
+  } catch (e) {
+    // Process might not be running
+  }
+}
 
 /**
  * Check if users and biometric devices already exist in the database
@@ -69,7 +86,7 @@ except Exception as e:
 /**
  * STEP 1: start FastAPI backend ONLY
  */
-function startBackend(showWindow: boolean = true) {
+function startBackend(showWindow = true) {
   console.log("==============================");
   console.log("STEP 1: Starting backend...");
 
@@ -101,12 +118,11 @@ function startBackend(showWindow: boolean = true) {
     // Run backend silently in background - spawn directly without cmd.exe wrapper
     backendProcess = spawn(exePath, [], {
       cwd: path.dirname(exePath),
-      detached: true,
+      detached: false, // Set to false so we can properly terminate it
       windowsHide: true,
       stdio: "ignore",
       shell: false,
     });
-    backendProcess?.unref();
   }
 
   backendProcess?.on("error", (err) => console.error("❌ Backend error:", err));
@@ -227,44 +243,118 @@ async function boot() {
     createWindow();
   } catch (err) {
     console.error("Boot failed:", err);
-    app.quit();
+    killAllSync();
+    process.exit(1);
   }
 }
 
 if (started) {
-  app.quit();
+  console.log("Running under Squirrel installer, cleaning up...");
+  // Kill any existing backend processes
+  killExistingBackend();
+  // Exit immediately
+  setTimeout(() => {
+    process.exit(0);
+  }, 100);
 }
 
-app.on("ready", boot);
+app.on("ready", () => {
+  // Double check - if running under installer, don't boot the app
+  if (started) {
+    console.log(
+      "Installer mode detected in ready event, cleaning up and exiting...",
+    );
+    killExistingBackend();
+    process.exit(0);
+    return;
+  }
+  boot();
+});
+
+// Handle any uncaught exceptions
+process.on("uncaughtException", (err) => {
+  console.error("Uncaught exception:", err);
+  killAllSync();
+  process.exit(1);
+});
 
 /**
- * Cleanup — kill all child processes on exit
+ * Cleanup — kill all child processes on exit (SYNCHRONOUS)
  */
-function killAll() {
+function killAllSync() {
+  console.log("Killing all child processes...");
+
+  // Close express server first
   if (expressServer) {
-    expressServer.close();
+    try {
+      expressServer.close();
+    } catch (e) {
+      console.log("Express server already closed");
+    }
     expressServer = null;
   }
 
+  // Kill backend process by PID directly
   if (backendProcess?.pid) {
     try {
-      exec(`taskkill /PID ${backendProcess.pid} /T /F`);
-    } catch {
-      // Process might already be dead
+      console.log(`Killing backend process PID: ${backendProcess.pid}`);
+      process.kill(backendProcess.pid, "SIGKILL");
+    } catch (e) {
+      console.log("Backend process kill failed:", e);
     }
     backendProcess = null;
   }
 
-  // Also kill any lbdc_server processes
-  exec(`taskkill /IM lbdc_server.exe /T /F 2>nul`, { shell: "cmd.exe" });
-  exec(`taskkill /IM main.exe /T /F 2>nul`, { shell: "cmd.exe" });
+  // Also try to kill by executable name (more reliable on Windows)
+  try {
+    console.log("Force killing lbdc_server.exe...");
+    const result = spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
+      shell: false,
+      stdio: "ignore",
+      timeout: 3000,
+      windowsHide: true,
+    });
+    console.log("taskkill lbdc_server result:", result.status);
+  } catch (e) {
+    console.log("Taskkill lbdc_server failed:", e);
+  }
+
+  // Kill any main.exe processes (Electron app itself)
+  try {
+    console.log("Force killing main.exe...");
+    spawnSync("taskkill", ["/IM", "main.exe", "/F"], {
+      shell: false,
+      stdio: "ignore",
+      timeout: 3000,
+      windowsHide: true,
+    });
+  } catch (e) {
+    console.log("Taskkill main failed:", e);
+  }
+
+  console.log("Cleanup complete");
 }
 
 app.on("window-all-closed", () => {
-  killAll();
-  if (process.platform !== "darwin") app.quit();
+  // Don't quit on macOS - let before-quit handle it
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
 });
 
-app.on("before-quit", () => {
-  killAll();
+app.on("before-quit", (event) => {
+  // Prevent default quit to ensure our cleanup runs
+  if (!isShuttingDown) {
+    event.preventDefault();
+    isShuttingDown = true;
+
+    console.log("App shutting down...");
+
+    // Kill all processes synchronously - NO ASYNC/AWAIT
+    killAllSync();
+
+    console.log("Calling process.exit(0)...");
+    // Use process.exit() for hard exit, not app.exit()
+    process.exit(0);
+  }
 });
