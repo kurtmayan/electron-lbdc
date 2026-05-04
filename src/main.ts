@@ -31,55 +31,14 @@ function killExistingBackend() {
 }
 
 /**
- * Check if users and biometric devices already exist in the database
+ * Check if database already exists
  */
 async function checkDatabaseSetup(): Promise<boolean> {
-  return new Promise((resolve) => {
-    const pythonScript = `
-import sys
-sys.path.insert(0, '${path.join(app.getAppPath(), "server").replace(/\\/g, "\\\\")}')
-
-try:
-    from app.core.database import SessionLocal
-    from app.core.models import BiometricInformation, User
-    
-    db = SessionLocal()
-    user_exists = db.query(User).first() is not None
-    biometric_exists = db.query(BiometricInformation).first() is not None
-    db.close()
-    
-    if user_exists and biometric_exists:
-        print('READY')
-    else:
-        print('SETUP_NEEDED')
-except Exception as e:
-    print('ERROR')
-`;
-
-    const python = spawn("python", ["-c", pythonScript], {
-      cwd: path.join(app.getAppPath(), "server"),
-    });
-
-    let output = "";
-
-    python.stdout.on("data", (data) => {
-      output += data.toString().trim();
-    });
-
-    python.on("close", (code) => {
-      resolve(output.includes("READY"));
-    });
-
-    python.on("error", () => {
-      resolve(false);
-    });
-
-    // Timeout after 5 seconds
-    setTimeout(() => {
-      python.kill();
-      resolve(false);
-    }, 5000);
-  });
+  const appDataDir = path.join(app.getPath("userData"), "data");
+  const dbPath = path.join(appDataDir, "bdc.db");
+  
+  // If database file exists, setup is already done
+  return fs.existsSync(dbPath);
 }
 
 /**
@@ -112,8 +71,8 @@ function startBackend(showWindow = true) {
 
   // Copy .env file to AppData so server can read it
   const envSource = app.isPackaged
-    ? path.join(process.resourcesPath, "server", ".env")
-    : path.join(app.getAppPath(), "server", ".env");
+    ? path.join(process.resourcesPath, "server", "dist", ".env")
+    : path.join(app.getAppPath(), "server", "dist", ".env");
   const envDest = path.join(appDataDir, ".env");
 
   try {
