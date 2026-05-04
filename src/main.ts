@@ -1,15 +1,22 @@
-import { app, BrowserWindow } from "electron";
+import { app, BrowserWindow, Menu, ipcMain, dialog } from "electron";
 import path from "node:path";
 import { spawn, ChildProcess, spawnSync } from "child_process";
 import fs from "fs";
 import express from "express";
 import { Server } from "http";
+import { autoUpdater } from "electron-updater";
 
 let expressServer: Server | null = null;
 
 let backendProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isShuttingDown = false; // Flag to prevent multiple shutdown calls
+
+// Update tracking
+let updateAvailable = false;
+let updateVersion = "";
+let isDownloading = false;
+let progressWindow: BrowserWindow | null = null;
 
 const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
@@ -36,7 +43,7 @@ function killExistingBackend() {
 async function checkDatabaseSetup(): Promise<boolean> {
   const appDataDir = path.join(app.getPath("userData"), "data");
   const dbPath = path.join(appDataDir, "bdc.db");
-  
+
   // If database file exists, setup is already done
   return fs.existsSync(dbPath);
 }
@@ -175,6 +182,202 @@ async function waitForPort(port: number) {
 }
 
 /**
+ * Create application menu with Version tab
+ */
+function createMenu() {
+  const appVersion = app.getVersion();
+
+  const versionLabel = updateAvailable
+    ? `Update to v${updateVersion}`
+    : "Check for Updates";
+
+  const template = [
+    {
+      label: "File",
+      submenu: [
+        {
+          label: "Exit",
+          accelerator: "CmdOrCtrl+Q",
+          click: () => {
+            app.quit();
+          },
+        },
+      ],
+    },
+    {
+      label: "Version",
+      submenu: [
+        {
+          label: `Current: v${appVersion}`,
+          enabled: false,
+        },
+        { type: "separator" as const },
+        {
+          label: versionLabel,
+          click: () => {
+            if (updateAvailable && !isDownloading) {
+              installUpdate().catch((err) => {
+                console.error("Failed to install update:", err);
+              });
+            } else {
+              checkForUpdates().catch((err) => {
+                console.error("Failed to check for updates:", err);
+              });
+            }
+          },
+        },
+      ],
+    },
+  ];
+
+  const menu = Menu.buildFromTemplate(
+    template as Electron.MenuItemConstructorOptions[],
+  );
+  Menu.setApplicationMenu(menu);
+  console.log("Menu created with Version tab");
+}
+
+/**
+ * Check for updates
+ */
+async function checkForUpdates() {
+  try {
+    console.log("Checking for updates...");
+    autoUpdater.autoDownload = false;
+    autoUpdater.autoInstallOnAppQuit = false;
+
+    const result = await autoUpdater.checkForUpdates();
+    console.log("Update check result:", result);
+
+    // If no update info is returned, show "no update" message
+    if (!result || !result.updateInfo || !result.updateInfo.version) {
+      dialog.showMessageBox(mainWindow!, {
+        type: "info",
+        title: "No Updates Available",
+        message: "You're using the newest version 🎉",
+        detail: `Current version: ${app.getVersion()}`,
+      });
+    }
+  } catch (error) {
+    console.error("Error checking for updates:", error);
+
+    // Show a friendly "no update available" message instead of error
+    dialog.showMessageBox(mainWindow!, {
+      type: "info",
+      title: "No Updates Available",
+      message: "You're using the newest version 🎉",
+      detail: `Current version: ${app.getVersion()}`,
+    });
+  }
+}
+
+/**
+ * Install the update
+ */
+async function installUpdate() {
+  try {
+    isDownloading = true;
+    await autoUpdater.downloadUpdate();
+  } catch (error) {
+    console.error("Error installing update:", error);
+    isDownloading = false;
+  }
+}
+
+/**
+ * Initialize updater events
+ */
+function initializeUpdater() {
+  autoUpdater.on("update-available", (info) => {
+    updateAvailable = true;
+    updateVersion = info.version;
+    console.log(`Update available: ${info.version}`);
+
+    if (mainWindow) {
+      mainWindow.webContents.send("update-available", {
+        version: info.version,
+      });
+    }
+
+    // Update menu
+    createMenu();
+
+    dialog.showMessageBox(mainWindow!, {
+      type: "info",
+      title: "Update Available",
+      message: `Version ${info.version} is available.`,
+      detail: "Click the Version menu to install the update.",
+      buttons: ["Install Now", "Later"],
+    });
+  });
+
+  autoUpdater.on("update-not-available", () => {
+    console.log("No updates available");
+    dialog.showMessageBox(mainWindow!, {
+      type: "info",
+      title: "No Updates Available",
+      message: "You're using the newest version 🎉",
+      detail: `Current version: ${app.getVersion()}`,
+    });
+  });
+
+  autoUpdater.on("download-progress", (progressObj) => {
+    const progress = Math.round(progressObj.percent);
+    console.log(`Download progress: ${progress}%`);
+  });
+
+  autoUpdater.on("update-downloaded", () => {
+    console.log("Update downloaded successfully");
+    isDownloading = false;
+
+    if (progressWindow && !progressWindow.isDestroyed()) {
+      progressWindow.close();
+      progressWindow = null;
+    }
+
+    dialog
+      .showMessageBox(mainWindow!, {
+        type: "info",
+        title: "Update Ready",
+        message: "Update has been downloaded successfully.",
+        detail: "The application will now restart to install the update.",
+        buttons: ["Restart Now"],
+      })
+      .then(() => {
+        autoUpdater.quitAndInstall();
+      });
+  });
+
+  autoUpdater.on("error", (error) => {
+    console.error("Update error:", error);
+    if (progressWindow && !progressWindow.isDestroyed()) {
+      progressWindow.close();
+      progressWindow = null;
+    }
+    isDownloading = false;
+
+    // Show friendly "no update" message instead of error
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "No Updates Available",
+        message: "You're using the newest version 🎉",
+        detail: `Current version: ${app.getVersion()}`,
+      });
+    }
+  });
+
+  // Setup IPC handlers
+  ipcMain.handle("check-for-updates", async () => {
+    await checkForUpdates();
+  });
+
+  ipcMain.handle("get-app-version", () => {
+    return app.getVersion();
+  });
+}
+
+/**
  * STEP 4: open window
  */
 function createWindow() {
@@ -197,6 +400,9 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  // Initialize updater
+  initializeUpdater();
 
   console.log("STEP 4 DONE");
 }
@@ -232,6 +438,8 @@ async function boot() {
 }
 
 app.on("ready", () => {
+  // Create menu immediately when app is ready
+  createMenu();
   boot();
 });
 

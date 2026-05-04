@@ -17,7 +17,7 @@
     "make:win64": "electron-forge make --arch=x64 --platform=win32",
     "make:all": "npm run install:all && npm run build:all && npm run make:win32 && npm run make:win64",
     "package": "npm run build:all && electron-forge package",
-    "publish": "electron-forge publish",
+    "publish": "electron-builder --publish always",
     "lint": "eslint --ext .ts,.tsx .",
     "preview": "vite preview",
     "build": "electron-builder"
@@ -91,6 +91,11 @@
       "createDesktopShortcut": true,
       "runAfterFinish": true,
       "include": "installer.nsh"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "kurtmayan",
+      "repo": "electron-lbdc"
     }
   }
 }
