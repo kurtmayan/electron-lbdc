@@ -20,7 +20,8 @@
     "publish": "electron-builder --publish always",
     "lint": "eslint --ext .ts,.tsx .",
     "preview": "vite preview",
-    "build": "electron-builder"
+    "build": "electron-builder",
+    "build:all-arch": "electron-builder --win --ia32 --x64"
   },
   "keywords": [],
   "author": {
@@ -81,7 +82,15 @@
       }
     ],
     "win": {
-      "target": "nsis",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64",
+            "ia32"
+          ]
+        }
+      ],
       "icon": "resources/icon.ico"
     },
     "nsis": {
