@@ -54,7 +54,7 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   runAfterFinish: true
-  include: "installer.nsh"
+  include: "setup.nsh"
 
 publish:
   provider: github
