@@ -3,9 +3,9 @@ import path from "path";
 
 const isWindows = process.platform === "win32";
 const shell = isWindows ? "cmd.exe" : "/bin/sh";
-const pipPython = isWindows
-  ? ".venv\\Scripts\\python.exe"
-  : ".venv/bin/python3";
+const pyInstaller = isWindows
+  ? ".venv\\Scripts\\pyinstaller.exe"
+  : ".venv/bin/pyinstaller";
 
 const options: ExecSyncOptions = {
   cwd: path.join(__dirname, "../server"),
@@ -29,7 +29,7 @@ const hiddenImports = [
   .join(" ");
 
 execSync(
-  `${pipPython} -m PyInstaller --onefile ${hiddenImports} --name lbdc_server app/main.py`,
+  `${pyInstaller} --onefile --windowed ${hiddenImports} --name lbdc_server app/main.py`,
   options,
 );
 

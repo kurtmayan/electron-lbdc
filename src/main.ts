@@ -16,10 +16,11 @@ let isShuttingDown = false; // Flag to prevent multiple shutdown calls
 let updateAvailable = false;
 let updateVersion = "";
 let isDownloading = false;
-let progressWindow: BrowserWindow | null = null;
 
 const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
+const IS_WINDOWS = process.platform === "win32";
+const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
 
 /**
  * Check if database already exists
@@ -40,18 +41,20 @@ function startBackend(showWindow = true) {
   console.log("STEP 1: Starting backend...");
 
   // With electron-builder extraResources, files are copied as-is:
-  // - server/dist/lbdc_server.exe -> resources/server/dist/lbdc_server.exe
+  // - server/dist/lbdc_server.exe -> resources/server/dist/lbdc_server.exe (Windows)
+  // - server/dist/lbdc_server -> resources/server/dist/lbdc_server (macOS/Linux)
   // - client/dist -> resources/client/dist
   const exePath = app.isPackaged
-    ? path.join(process.resourcesPath, "server", "dist", "lbdc_server.exe")
-    : path.join(app.getAppPath(), "server", "dist", "lbdc_server.exe");
+    ? path.join(process.resourcesPath, "server", "dist", EXECUTABLE_NAME)
+    : path.join(app.getAppPath(), "server", "dist", EXECUTABLE_NAME);
 
   console.log("Backend path:", exePath);
   console.log("File exists:", fs.existsSync(exePath));
   console.log("Show window:", showWindow);
+  console.log("Platform:", IS_WINDOWS ? "Windows" : "macOS/Linux");
 
   if (!fs.existsSync(exePath)) {
-    throw new Error(`Backend EXE not found: ${exePath}`);
+    throw new Error(`Backend executable not found: ${exePath}`);
   }
 
   // Create AppData directory for database (writable location)
@@ -78,21 +81,32 @@ function startBackend(showWindow = true) {
   console.log("Server working directory:", appDataDir);
 
   if (showWindow) {
-    // Show terminal window for setup
-    backendProcess = spawn(
-      "cmd.exe",
-      ["/c", "start", "cmd.exe", "/k", exePath],
-      {
+    // Show terminal/console window for setup
+    if (IS_WINDOWS) {
+      // Windows: Show cmd.exe window
+      backendProcess = spawn(
+        "cmd.exe",
+        ["/c", "start", "cmd.exe", "/k", exePath],
+        {
+          cwd: appDataDir,
+          shell: false,
+        },
+      );
+    } else {
+      // macOS/Linux: Open in terminal
+      backendProcess = spawn(exePath, [], {
         cwd: appDataDir,
+        detached: false,
+        stdio: "inherit", // Show output in console
         shell: false,
-      },
-    );
+      });
+    }
   } else {
-    // Run backend silently in background - spawn directly without cmd.exe wrapper
+    // Run backend silently in background
     backendProcess = spawn(exePath, [], {
       cwd: appDataDir,
-      detached: false, // Set to false so we can properly terminate it
-      windowsHide: true,
+      detached: false,
+      windowsHide: IS_WINDOWS,
       stdio: "ignore",
       shell: false,
     });
@@ -146,11 +160,9 @@ function startFrontend() {
  * STEP 3: wait for a port to be ready
  */
 async function waitForPort(port: number) {
-  console.log(`Waiting for port ${port}...`);
-
   for (let i = 0; i < 30; i++) {
     try {
-      const res = await fetch(`http://localhost:${port}`);
+      const res = await fetch(`http://localhost:${port}`, { method: "HEAD" });
       if (res.ok || res.status < 500) {
         console.log(`✔ port ${port} ready`);
         return;
@@ -159,10 +171,59 @@ async function waitForPort(port: number) {
       // not ready yet
     }
 
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  throw new Error(`Port ${port} failed to start after 30 seconds`);
+  throw new Error(`Port ${port} failed to start after 15 seconds`);
+}
+
+/**
+ * Reset app and delete all data
+ */
+async function resetApp() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      title: "Reset Application?",
+      message:
+        "This will delete all your data and reset the app to a fresh state.",
+      detail:
+        "This action cannot be undone. All application data and database information will be permanently deleted. The app will restart automatically.",
+      buttons: ["Cancel", "Reset"],
+    });
+
+    if (result.response === 1) {
+      try {
+        // Kill backend process first
+        if (backendProcess?.pid) {
+          try {
+            process.kill(backendProcess.pid, "SIGKILL");
+          } catch (e) {
+            console.log("Backend process kill failed:", e);
+          }
+        }
+
+        // Delete application data
+        const appDataDir = path.join(app.getPath("userData"), "data");
+        if (fs.existsSync(appDataDir)) {
+          fs.rmSync(appDataDir, { recursive: true, force: true });
+          console.log("Application data reset:", appDataDir);
+        }
+
+        // Restart the app
+        console.log("Reset complete, restarting app...");
+        app.relaunch();
+        app.exit(0);
+      } catch (error) {
+        console.error("Error during reset:", error);
+        dialog.showMessageBox(mainWindow!, {
+          type: "error",
+          title: "Error",
+          message: "Failed to reset the application.",
+        });
+      }
+    }
+  }
 }
 
 /**
@@ -179,6 +240,13 @@ function createMenu() {
     {
       label: "File",
       submenu: [
+        {
+          label: "Reset App",
+          click: () => {
+            resetApp();
+          },
+        },
+        { type: "separator" as const },
         {
           label: "Exit",
           accelerator: "CmdOrCtrl+Q",
@@ -222,40 +290,36 @@ function createMenu() {
 }
 
 /**
+ * Show "no updates available" dialog
+ */
+function showNoUpdatesDialog() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "No Updates Available",
+      message: "You're using the newest version 🎉",
+      detail: `Current version: ${app.getVersion()}`,
+    });
+  }
+}
+
+/**
  * Check for updates
  */
 async function checkForUpdates() {
   try {
-    console.log("Checking for updates...");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
     const result = await autoUpdater.checkForUpdates();
-    console.log("Update check result:", result);
 
     // If no update info is returned, show "no update" message
     if (!result || !result.updateInfo || !result.updateInfo.version) {
-      if (mainWindow) {
-        dialog.showMessageBox(mainWindow, {
-          type: "info",
-          title: "No Updates Available",
-          message: "You're using the newest version 🎉",
-          detail: `Current version: ${app.getVersion()}`,
-        });
-      }
+      showNoUpdatesDialog();
     }
   } catch (error) {
     console.error("Error checking for updates:", error);
-
-    // Show a friendly "no update available" message instead of error
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   }
 }
 
@@ -302,30 +366,15 @@ function initializeUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
-    console.log("No updates available");
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   });
 
-  autoUpdater.on("download-progress", (progressObj) => {
-    const progress = Math.round(progressObj.percent);
-    console.log(`Download progress: ${progress}%`);
+  autoUpdater.on("download-progress", () => {
+    // Progress tracking (silent in production)
   });
 
   autoUpdater.on("update-downloaded", () => {
-    console.log("Update downloaded successfully");
     isDownloading = false;
-
-    if (progressWindow && !progressWindow.isDestroyed()) {
-      progressWindow.close();
-      progressWindow = null;
-    }
 
     if (mainWindow) {
       dialog
@@ -346,21 +395,8 @@ function initializeUpdater() {
 
   autoUpdater.on("error", (error) => {
     console.error("Update error:", error);
-    if (progressWindow && !progressWindow.isDestroyed()) {
-      progressWindow.close();
-      progressWindow = null;
-    }
     isDownloading = false;
-
-    // Show friendly "no update" message instead of error
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   });
 
   // Setup IPC handlers
@@ -418,7 +454,6 @@ async function boot() {
       await waitForPort(BACKEND_PORT);
     } else {
       // Setup already complete - run backend silently
-      console.log("✔ Database already set up, starting backend silently");
       startBackend(false);
       await waitForPort(BACKEND_PORT);
     }
@@ -473,31 +508,45 @@ function killAllSync() {
     backendProcess = null;
   }
 
-  // Also try to kill by executable name (more reliable on Windows)
-  try {
-    console.log("Force killing lbdc_server.exe...");
-    const result = spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
-      shell: false,
-      stdio: "ignore",
-      timeout: 3000,
-      windowsHide: true,
-    });
-    console.log("taskkill lbdc_server result:", result.status);
-  } catch (e) {
-    console.log("Taskkill lbdc_server failed:", e);
-  }
+  // Also try to kill by executable name (platform-specific)
+  if (IS_WINDOWS) {
+    // Windows: Use taskkill
+    try {
+      console.log("Force killing lbdc_server.exe...");
+      const result = spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
+        shell: false,
+        stdio: "ignore",
+        timeout: 3000,
+        windowsHide: true,
+      });
+      console.log("taskkill lbdc_server result:", result.status);
+    } catch (e) {
+      console.log("Taskkill lbdc_server failed:", e);
+    }
 
-  // Kill any main.exe processes (Electron app itself)
-  try {
-    console.log("Force killing main.exe...");
-    spawnSync("taskkill", ["/IM", "main.exe", "/F"], {
-      shell: false,
-      stdio: "ignore",
-      timeout: 3000,
-      windowsHide: true,
-    });
-  } catch (e) {
-    console.log("Taskkill main failed:", e);
+    // Kill any main.exe processes (Electron app itself)
+    try {
+      console.log("Force killing main.exe...");
+      spawnSync("taskkill", ["/IM", "main.exe", "/F"], {
+        shell: false,
+        stdio: "ignore",
+        timeout: 3000,
+        windowsHide: true,
+      });
+    } catch (e) {
+      console.log("Taskkill main failed:", e);
+    }
+  } else {
+    // macOS/Linux: Use pkill or kill
+    try {
+      console.log("Force killing lbdc_server...");
+      spawnSync("pkill", ["-9", "lbdc_server"], {
+        stdio: "ignore",
+        timeout: 3000,
+      });
+    } catch (e) {
+      console.log("pkill lbdc_server failed:", e);
+    }
   }
 
   console.log("Cleanup complete");
