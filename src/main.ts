@@ -16,7 +16,6 @@ let isShuttingDown = false; // Flag to prevent multiple shutdown calls
 let updateAvailable = false;
 let updateVersion = "";
 let isDownloading = false;
-let progressWindow: BrowserWindow | null = null;
 
 const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
@@ -161,11 +160,9 @@ function startFrontend() {
  * STEP 3: wait for a port to be ready
  */
 async function waitForPort(port: number) {
-  console.log(`Waiting for port ${port}...`);
-
   for (let i = 0; i < 30; i++) {
     try {
-      const res = await fetch(`http://localhost:${port}`);
+      const res = await fetch(`http://localhost:${port}`, { method: "HEAD" });
       if (res.ok || res.status < 500) {
         console.log(`✔ port ${port} ready`);
         return;
@@ -174,10 +171,10 @@ async function waitForPort(port: number) {
       // not ready yet
     }
 
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 500));
   }
 
-  throw new Error(`Port ${port} failed to start after 30 seconds`);
+  throw new Error(`Port ${port} failed to start after 15 seconds`);
 }
 
 /**
@@ -237,40 +234,36 @@ function createMenu() {
 }
 
 /**
+ * Show "no updates available" dialog
+ */
+function showNoUpdatesDialog() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    dialog.showMessageBox(mainWindow, {
+      type: "info",
+      title: "No Updates Available",
+      message: "You're using the newest version 🎉",
+      detail: `Current version: ${app.getVersion()}`,
+    });
+  }
+}
+
+/**
  * Check for updates
  */
 async function checkForUpdates() {
   try {
-    console.log("Checking for updates...");
     autoUpdater.autoDownload = false;
     autoUpdater.autoInstallOnAppQuit = false;
 
     const result = await autoUpdater.checkForUpdates();
-    console.log("Update check result:", result);
 
     // If no update info is returned, show "no update" message
     if (!result || !result.updateInfo || !result.updateInfo.version) {
-      if (mainWindow) {
-        dialog.showMessageBox(mainWindow, {
-          type: "info",
-          title: "No Updates Available",
-          message: "You're using the newest version 🎉",
-          detail: `Current version: ${app.getVersion()}`,
-        });
-      }
+      showNoUpdatesDialog();
     }
   } catch (error) {
     console.error("Error checking for updates:", error);
-
-    // Show a friendly "no update available" message instead of error
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   }
 }
 
@@ -317,30 +310,15 @@ function initializeUpdater() {
   });
 
   autoUpdater.on("update-not-available", () => {
-    console.log("No updates available");
-    if (mainWindow) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   });
 
-  autoUpdater.on("download-progress", (progressObj) => {
-    const progress = Math.round(progressObj.percent);
-    console.log(`Download progress: ${progress}%`);
+  autoUpdater.on("download-progress", () => {
+    // Progress tracking (silent in production)
   });
 
   autoUpdater.on("update-downloaded", () => {
-    console.log("Update downloaded successfully");
     isDownloading = false;
-
-    if (progressWindow && !progressWindow.isDestroyed()) {
-      progressWindow.close();
-      progressWindow = null;
-    }
 
     if (mainWindow) {
       dialog
@@ -361,21 +339,8 @@ function initializeUpdater() {
 
   autoUpdater.on("error", (error) => {
     console.error("Update error:", error);
-    if (progressWindow && !progressWindow.isDestroyed()) {
-      progressWindow.close();
-      progressWindow = null;
-    }
     isDownloading = false;
-
-    // Show friendly "no update" message instead of error
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      dialog.showMessageBox(mainWindow, {
-        type: "info",
-        title: "No Updates Available",
-        message: "You're using the newest version 🎉",
-        detail: `Current version: ${app.getVersion()}`,
-      });
-    }
+    showNoUpdatesDialog();
   });
 
   // Setup IPC handlers
@@ -433,7 +398,6 @@ async function boot() {
       await waitForPort(BACKEND_PORT);
     } else {
       // Setup already complete - run backend silently
-      console.log("✔ Database already set up, starting backend silently");
       startBackend(false);
       await waitForPort(BACKEND_PORT);
     }
