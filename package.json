@@ -13,7 +13,6 @@
     "build:client": "cd ./client && npm run build",
     "build:server": "tsx scripts/build-server.ts",
     "build:all": "npm run build:client && npm run build:server",
-    "package": "npm run build:all && electron-forge package",
     "publish": "electron-builder --publish always",
     "lint": "eslint --ext .ts,.tsx .",
     "preview": "vite preview",
