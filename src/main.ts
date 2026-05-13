@@ -22,22 +22,6 @@ const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
 
 /**
- * Kill any existing backend processes (for cleanup)
- */
-function killExistingBackend() {
-  try {
-    spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
-      shell: false,
-      stdio: "ignore",
-      timeout: 2000,
-      windowsHide: true,
-    });
-  } catch (e) {
-    // Process might not be running
-  }
-}
-
-/**
  * Check if database already exists
  */
 async function checkDatabaseSetup(): Promise<boolean> {
@@ -251,23 +235,27 @@ async function checkForUpdates() {
 
     // If no update info is returned, show "no update" message
     if (!result || !result.updateInfo || !result.updateInfo.version) {
-      dialog.showMessageBox(mainWindow!, {
+      if (mainWindow) {
+        dialog.showMessageBox(mainWindow, {
+          type: "info",
+          title: "No Updates Available",
+          message: "You're using the newest version 🎉",
+          detail: `Current version: ${app.getVersion()}`,
+        });
+      }
+    }
+  } catch (error) {
+    console.error("Error checking for updates:", error);
+
+    // Show a friendly "no update available" message instead of error
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
         type: "info",
         title: "No Updates Available",
         message: "You're using the newest version 🎉",
         detail: `Current version: ${app.getVersion()}`,
       });
     }
-  } catch (error) {
-    console.error("Error checking for updates:", error);
-
-    // Show a friendly "no update available" message instead of error
-    dialog.showMessageBox(mainWindow!, {
-      type: "info",
-      title: "No Updates Available",
-      message: "You're using the newest version 🎉",
-      detail: `Current version: ${app.getVersion()}`,
-    });
   }
 }
 
@@ -302,23 +290,27 @@ function initializeUpdater() {
     // Update menu
     createMenu();
 
-    dialog.showMessageBox(mainWindow!, {
-      type: "info",
-      title: "Update Available",
-      message: `Version ${info.version} is available.`,
-      detail: "Click the Version menu to install the update.",
-      buttons: ["Install Now", "Later"],
-    });
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "Update Available",
+        message: `Version ${info.version} is available.`,
+        detail: "Click the Version menu to install the update.",
+        buttons: ["Install Now", "Later"],
+      });
+    }
   });
 
   autoUpdater.on("update-not-available", () => {
     console.log("No updates available");
-    dialog.showMessageBox(mainWindow!, {
-      type: "info",
-      title: "No Updates Available",
-      message: "You're using the newest version 🎉",
-      detail: `Current version: ${app.getVersion()}`,
-    });
+    if (mainWindow) {
+      dialog.showMessageBox(mainWindow, {
+        type: "info",
+        title: "No Updates Available",
+        message: "You're using the newest version 🎉",
+        detail: `Current version: ${app.getVersion()}`,
+      });
+    }
   });
 
   autoUpdater.on("download-progress", (progressObj) => {
@@ -335,17 +327,21 @@ function initializeUpdater() {
       progressWindow = null;
     }
 
-    dialog
-      .showMessageBox(mainWindow!, {
-        type: "info",
-        title: "Update Ready",
-        message: "Update has been downloaded successfully.",
-        detail: "The application will now restart to install the update.",
-        buttons: ["Restart Now"],
-      })
-      .then(() => {
-        autoUpdater.quitAndInstall();
-      });
+    if (mainWindow) {
+      dialog
+        .showMessageBox(mainWindow, {
+          type: "info",
+          title: "Update Ready",
+          message: "Update has been downloaded successfully.",
+          detail: "The application will now restart to install the update.",
+          buttons: ["Restart Now"],
+        })
+        .then(() => {
+          autoUpdater.quitAndInstall();
+        });
+    } else {
+      autoUpdater.quitAndInstall();
+    }
   });
 
   autoUpdater.on("error", (error) => {
