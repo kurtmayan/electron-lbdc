@@ -178,6 +178,55 @@ async function waitForPort(port: number) {
 }
 
 /**
+ * Reset app and delete all data
+ */
+async function resetApp() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    const result = await dialog.showMessageBox(mainWindow, {
+      type: "warning",
+      title: "Reset Application?",
+      message:
+        "This will delete all your data and reset the app to a fresh state.",
+      detail:
+        "This action cannot be undone. All application data and database information will be permanently deleted. The app will restart automatically.",
+      buttons: ["Cancel", "Reset"],
+    });
+
+    if (result.response === 1) {
+      try {
+        // Kill backend process first
+        if (backendProcess?.pid) {
+          try {
+            process.kill(backendProcess.pid, "SIGKILL");
+          } catch (e) {
+            console.log("Backend process kill failed:", e);
+          }
+        }
+
+        // Delete application data
+        const appDataDir = path.join(app.getPath("userData"), "data");
+        if (fs.existsSync(appDataDir)) {
+          fs.rmSync(appDataDir, { recursive: true, force: true });
+          console.log("Application data reset:", appDataDir);
+        }
+
+        // Restart the app
+        console.log("Reset complete, restarting app...");
+        app.relaunch();
+        app.exit(0);
+      } catch (error) {
+        console.error("Error during reset:", error);
+        dialog.showMessageBox(mainWindow!, {
+          type: "error",
+          title: "Error",
+          message: "Failed to reset the application.",
+        });
+      }
+    }
+  }
+}
+
+/**
  * Create application menu with Version tab
  */
 function createMenu() {
@@ -191,6 +240,13 @@ function createMenu() {
     {
       label: "File",
       submenu: [
+        {
+          label: "Reset App",
+          click: () => {
+            resetApp();
+          },
+        },
+        { type: "separator" as const },
         {
           label: "Exit",
           accelerator: "CmdOrCtrl+Q",
