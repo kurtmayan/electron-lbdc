@@ -20,6 +20,8 @@ let progressWindow: BrowserWindow | null = null;
 
 const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 8000;
+const IS_WINDOWS = process.platform === "win32";
+const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
 
 /**
  * Check if database already exists
@@ -40,18 +42,20 @@ function startBackend(showWindow = true) {
   console.log("STEP 1: Starting backend...");
 
   // With electron-builder extraResources, files are copied as-is:
-  // - server/dist/lbdc_server.exe -> resources/server/dist/lbdc_server.exe
+  // - server/dist/lbdc_server.exe -> resources/server/dist/lbdc_server.exe (Windows)
+  // - server/dist/lbdc_server -> resources/server/dist/lbdc_server (macOS/Linux)
   // - client/dist -> resources/client/dist
   const exePath = app.isPackaged
-    ? path.join(process.resourcesPath, "server", "dist", "lbdc_server.exe")
-    : path.join(app.getAppPath(), "server", "dist", "lbdc_server.exe");
+    ? path.join(process.resourcesPath, "server", "dist", EXECUTABLE_NAME)
+    : path.join(app.getAppPath(), "server", "dist", EXECUTABLE_NAME);
 
   console.log("Backend path:", exePath);
   console.log("File exists:", fs.existsSync(exePath));
   console.log("Show window:", showWindow);
+  console.log("Platform:", IS_WINDOWS ? "Windows" : "macOS/Linux");
 
   if (!fs.existsSync(exePath)) {
-    throw new Error(`Backend EXE not found: ${exePath}`);
+    throw new Error(`Backend executable not found: ${exePath}`);
   }
 
   // Create AppData directory for database (writable location)
@@ -78,21 +82,32 @@ function startBackend(showWindow = true) {
   console.log("Server working directory:", appDataDir);
 
   if (showWindow) {
-    // Show terminal window for setup
-    backendProcess = spawn(
-      "cmd.exe",
-      ["/c", "start", "cmd.exe", "/k", exePath],
-      {
+    // Show terminal/console window for setup
+    if (IS_WINDOWS) {
+      // Windows: Show cmd.exe window
+      backendProcess = spawn(
+        "cmd.exe",
+        ["/c", "start", "cmd.exe", "/k", exePath],
+        {
+          cwd: appDataDir,
+          shell: false,
+        },
+      );
+    } else {
+      // macOS/Linux: Open in terminal
+      backendProcess = spawn(exePath, [], {
         cwd: appDataDir,
+        detached: false,
+        stdio: "inherit", // Show output in console
         shell: false,
-      },
-    );
+      });
+    }
   } else {
-    // Run backend silently in background - spawn directly without cmd.exe wrapper
+    // Run backend silently in background
     backendProcess = spawn(exePath, [], {
       cwd: appDataDir,
-      detached: false, // Set to false so we can properly terminate it
-      windowsHide: true,
+      detached: false,
+      windowsHide: IS_WINDOWS,
       stdio: "ignore",
       shell: false,
     });
@@ -473,31 +488,45 @@ function killAllSync() {
     backendProcess = null;
   }
 
-  // Also try to kill by executable name (more reliable on Windows)
-  try {
-    console.log("Force killing lbdc_server.exe...");
-    const result = spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
-      shell: false,
-      stdio: "ignore",
-      timeout: 3000,
-      windowsHide: true,
-    });
-    console.log("taskkill lbdc_server result:", result.status);
-  } catch (e) {
-    console.log("Taskkill lbdc_server failed:", e);
-  }
+  // Also try to kill by executable name (platform-specific)
+  if (IS_WINDOWS) {
+    // Windows: Use taskkill
+    try {
+      console.log("Force killing lbdc_server.exe...");
+      const result = spawnSync("taskkill", ["/IM", "lbdc_server.exe", "/F"], {
+        shell: false,
+        stdio: "ignore",
+        timeout: 3000,
+        windowsHide: true,
+      });
+      console.log("taskkill lbdc_server result:", result.status);
+    } catch (e) {
+      console.log("Taskkill lbdc_server failed:", e);
+    }
 
-  // Kill any main.exe processes (Electron app itself)
-  try {
-    console.log("Force killing main.exe...");
-    spawnSync("taskkill", ["/IM", "main.exe", "/F"], {
-      shell: false,
-      stdio: "ignore",
-      timeout: 3000,
-      windowsHide: true,
-    });
-  } catch (e) {
-    console.log("Taskkill main failed:", e);
+    // Kill any main.exe processes (Electron app itself)
+    try {
+      console.log("Force killing main.exe...");
+      spawnSync("taskkill", ["/IM", "main.exe", "/F"], {
+        shell: false,
+        stdio: "ignore",
+        timeout: 3000,
+        windowsHide: true,
+      });
+    } catch (e) {
+      console.log("Taskkill main failed:", e);
+    }
+  } else {
+    // macOS/Linux: Use pkill or kill
+    try {
+      console.log("Force killing lbdc_server...");
+      spawnSync("pkill", ["-9", "lbdc_server"], {
+        stdio: "ignore",
+        timeout: 3000,
+      });
+    } catch (e) {
+      console.log("pkill lbdc_server failed:", e);
+    }
   }
 
   console.log("Cleanup complete");
