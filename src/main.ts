@@ -18,7 +18,7 @@ let updateVersion = "";
 let isDownloading = false;
 
 const FRONTEND_PORT = 4173; // vite preview default port
-const BACKEND_PORT = 8000;
+const BACKEND_PORT = 63210;
 const IS_WINDOWS = process.platform === "win32";
 const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
 
