@@ -1,7 +1,7 @@
 {
   "name": "mrdiy-lbdc",
   "productName": "Mr. DIY - LOCAL",
-  "version": "1.2.7",
+  "version": "2.2.7",
   "description": "Biometrics Data Consolidator",
   "main": ".vite/build/main.js",
   "private": true,
