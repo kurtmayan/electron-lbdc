@@ -11,6 +11,7 @@ let expressServer: Server | null = null;
 let backendProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isShuttingDown = false; // Flag to prevent multiple shutdown calls
+let focusWindowWhenReady = false;
 
 // Update tracking
 let updateAvailable = false;
@@ -21,6 +22,32 @@ const FRONTEND_PORT = 4173; // vite preview default port
 const BACKEND_PORT = 63210;
 const IS_WINDOWS = process.platform === "win32";
 const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    focusMainWindow();
+  });
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    focusWindowWhenReady = true;
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  mainWindow.focus();
+}
 
 /**
  * Check if database already exists
@@ -433,6 +460,11 @@ function createWindow() {
     mainWindow = null;
   });
 
+  if (focusWindowWhenReady) {
+    focusWindowWhenReady = false;
+    focusMainWindow();
+  }
+
   // Initialize updater
   initializeUpdater();
 
@@ -468,11 +500,13 @@ async function boot() {
   }
 }
 
-app.on("ready", () => {
-  // Create menu immediately when app is ready
-  createMenu();
-  boot();
-});
+if (hasSingleInstanceLock) {
+  app.on("ready", () => {
+    // Create menu immediately when app is ready
+    createMenu();
+    boot();
+  });
+}
 
 // Handle any uncaught exceptions
 process.on("uncaughtException", (err) => {
@@ -552,26 +586,28 @@ function killAllSync() {
   console.log("Cleanup complete");
 }
 
-app.on("window-all-closed", () => {
-  // Don't quit on macOS - let before-quit handle it
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+if (hasSingleInstanceLock) {
+  app.on("window-all-closed", () => {
+    // Don't quit on macOS - let before-quit handle it
+    if (process.platform !== "darwin") {
+      app.quit();
+    }
+  });
 
-app.on("before-quit", (event) => {
-  // Prevent default quit to ensure our cleanup runs
-  if (!isShuttingDown) {
-    event.preventDefault();
-    isShuttingDown = true;
+  app.on("before-quit", (event) => {
+    // Prevent default quit to ensure our cleanup runs
+    if (!isShuttingDown) {
+      event.preventDefault();
+      isShuttingDown = true;
 
-    console.log("App shutting down...");
+      console.log("App shutting down...");
 
-    // Kill all processes synchronously - NO ASYNC/AWAIT
-    killAllSync();
+      // Kill all processes synchronously - NO ASYNC/AWAIT
+      killAllSync();
 
-    console.log("Calling process.exit(0)...");
-    // Use process.exit() for hard exit, not app.exit()
-    process.exit(0);
-  }
-});
+      console.log("Calling process.exit(0)...");
+      // Use process.exit() for hard exit, not app.exit()
+      process.exit(0);
+    }
+  });
+}
