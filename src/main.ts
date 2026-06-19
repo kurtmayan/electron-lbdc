@@ -18,7 +18,9 @@ let updateAvailable = false;
 let updateVersion = "";
 let isDownloading = false;
 
-const FRONTEND_HOST = "127.0.0.1";
+const FRONTEND_HOST = "localhost";
+const FRONTEND_PORT = 4173; // Keep stable so renderer localStorage/session persist.
+const FRONTEND_URL = `http://localhost:${FRONTEND_PORT}`;
 const BACKEND_HOST = "127.0.0.1";
 const BACKEND_PORT = 63210;
 const IS_WINDOWS = process.platform === "win32";
@@ -149,8 +151,8 @@ function startBackend(showWindow = true) {
 /**
  * STEP 2: start frontend
  *
- * Serve the built React app on an OS-assigned localhost port. Avoiding a fixed
- * frontend port prevents Electron from opening a stale or unrelated service.
+ * Serve the built React app on a stable localhost origin. The fixed port keeps
+ * renderer localStorage/session data available across app restarts.
  */
 async function startFrontend(): Promise<string> {
   console.log("==============================");
@@ -176,7 +178,7 @@ async function startFrontend(): Promise<string> {
   });
 
   return new Promise((resolve, reject) => {
-    const httpServer = server.listen(0, FRONTEND_HOST);
+    const httpServer = server.listen(FRONTEND_PORT, FRONTEND_HOST);
     expressServer = httpServer;
 
     httpServer.once("error", (error) => {
@@ -188,17 +190,9 @@ async function startFrontend(): Promise<string> {
     });
 
     httpServer.once("listening", () => {
-      const address = httpServer.address();
-
-      if (!address || typeof address === "string") {
-        reject(new Error("Unable to determine frontend server address"));
-        return;
-      }
-
-      const frontendUrl = `http://${FRONTEND_HOST}:${address.port}`;
-      console.log(`✔ Frontend served at ${frontendUrl}`);
+      console.log(`✔ Frontend served at ${FRONTEND_URL}`);
       console.log("STEP 2 DONE");
-      resolve(frontendUrl);
+      resolve(FRONTEND_URL);
     });
   });
 }
