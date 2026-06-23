@@ -11,16 +11,46 @@ let expressServer: Server | null = null;
 let backendProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
 let isShuttingDown = false; // Flag to prevent multiple shutdown calls
+let focusWindowWhenReady = false;
 
 // Update tracking
 let updateAvailable = false;
 let updateVersion = "";
 let isDownloading = false;
 
-const FRONTEND_PORT = 4173; // vite preview default port
+const FRONTEND_HOST = "localhost";
+const FRONTEND_PORT = 4173; // Keep stable so renderer localStorage/session persist.
+const FRONTEND_URL = `http://localhost:${FRONTEND_PORT}`;
+const BACKEND_HOST = "127.0.0.1";
 const BACKEND_PORT = 63210;
 const IS_WINDOWS = process.platform === "win32";
 const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+if (!hasSingleInstanceLock) {
+  app.exit(0);
+} else {
+  app.on("second-instance", () => {
+    focusMainWindow();
+  });
+}
+
+function focusMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    focusWindowWhenReady = true;
+    return;
+  }
+
+  if (mainWindow.isMinimized()) {
+    mainWindow.restore();
+  }
+
+  if (!mainWindow.isVisible()) {
+    mainWindow.show();
+  }
+
+  mainWindow.focus();
+}
 
 /**
  * Check if database already exists
@@ -121,12 +151,10 @@ function startBackend(showWindow = true) {
 /**
  * STEP 2: start frontend
  *
- * - DEV (not packaged):  spawn `vite preview` inside front-end-client/
- *                        (make sure you've run `vite build` first)
- * - PROD (packaged EXE): same thing but cwd points to the bundled copy
- *                        inside resources/front-end-client/
+ * Serve the built React app on a stable localhost origin. The fixed port keeps
+ * renderer localStorage/session data available across app restarts.
  */
-function startFrontend() {
+async function startFrontend(): Promise<string> {
   console.log("==============================");
   console.log("STEP 2: Starting frontend...");
 
@@ -149,22 +177,41 @@ function startFrontend() {
     res.sendFile(path.join(distPath, "index.html"));
   });
 
-  expressServer = server.listen(FRONTEND_PORT, () => {
-    console.log(`✔ Frontend served at http://localhost:${FRONTEND_PORT}`);
-  });
+  return new Promise((resolve, reject) => {
+    const httpServer = server.listen(FRONTEND_PORT, FRONTEND_HOST);
+    expressServer = httpServer;
 
-  console.log("STEP 2 DONE");
+    httpServer.once("error", (error) => {
+      if (expressServer === httpServer) {
+        expressServer = null;
+      }
+
+      reject(error);
+    });
+
+    httpServer.once("listening", () => {
+      console.log(`✔ Frontend served at ${FRONTEND_URL}`);
+      console.log("STEP 2 DONE");
+      resolve(FRONTEND_URL);
+    });
+  });
 }
 
 /**
- * STEP 3: wait for a port to be ready
+ * STEP 3: wait for backend to be ready
  */
-async function waitForPort(port: number) {
+async function waitForBackend() {
+  const backendUrl = `http://${BACKEND_HOST}:${BACKEND_PORT}/`;
+
   for (let i = 0; i < 30; i++) {
     try {
-      const res = await fetch(`http://localhost:${port}`, { method: "HEAD" });
-      if (res.ok || res.status < 500) {
-        console.log(`✔ port ${port} ready`);
+      const res = await fetch(backendUrl, { method: "GET" });
+      const body = (await res.json().catch(() => null)) as {
+        Hello?: string;
+      } | null;
+
+      if (res.ok && body?.Hello === "World") {
+        console.log(`✔ backend ready at ${backendUrl}`);
         return;
       }
     } catch {
@@ -174,7 +221,30 @@ async function waitForPort(port: number) {
     await new Promise((r) => setTimeout(r, 500));
   }
 
-  throw new Error(`Port ${port} failed to start after 15 seconds`);
+  throw new Error(`Backend failed to start at ${backendUrl} after 15 seconds`);
+}
+
+/**
+ * STEP 3b: verify the frontend server is serving the React app
+ */
+async function waitForFrontend(frontendUrl: string) {
+  for (let i = 0; i < 30; i++) {
+    try {
+      const res = await fetch(frontendUrl, { method: "GET" });
+      const html = await res.text();
+
+      if (res.ok && html.includes('id="root"') && html.includes("/assets/")) {
+        console.log(`✔ frontend ready at ${frontendUrl}`);
+        return;
+      }
+    } catch {
+      // not ready yet
+    }
+
+    await new Promise((r) => setTimeout(r, 500));
+  }
+
+  throw new Error(`Frontend failed to start at ${frontendUrl} after 15 seconds`);
 }
 
 /**
@@ -412,7 +482,7 @@ function initializeUpdater() {
 /**
  * STEP 4: open window
  */
-function createWindow() {
+function createWindow(frontendUrl: string) {
   console.log("==============================");
   console.log("STEP 4: creating window...");
 
@@ -422,7 +492,7 @@ function createWindow() {
     icon: path.join(__dirname, "../resources/icon.ico"),
   });
 
-  mainWindow.loadURL(`http://localhost:${FRONTEND_PORT}`);
+  mainWindow.loadURL(frontendUrl);
 
   // Open DevTools in dev mode
   // if (!app.isPackaged) {
@@ -432,6 +502,11 @@ function createWindow() {
   mainWindow.on("closed", () => {
     mainWindow = null;
   });
+
+  if (focusWindowWhenReady) {
+    focusWindowWhenReady = false;
+    focusMainWindow();
+  }
 
   // Initialize updater
   initializeUpdater();
@@ -451,16 +526,16 @@ async function boot() {
       // Setup needed - run backend in background
       console.log("Database setup needed - starting backend in background");
       startBackend(false);
-      await waitForPort(BACKEND_PORT);
+      await waitForBackend();
     } else {
       // Setup already complete - run backend silently
       startBackend(false);
-      await waitForPort(BACKEND_PORT);
+      await waitForBackend();
     }
 
-    startFrontend();
-    await waitForPort(FRONTEND_PORT);
-    createWindow();
+    const frontendUrl = await startFrontend();
+    await waitForFrontend(frontendUrl);
+    createWindow(frontendUrl);
   } catch (err) {
     console.error("Boot failed:", err);
     killAllSync();
@@ -468,11 +543,13 @@ async function boot() {
   }
 }
 
-app.on("ready", () => {
-  // Create menu immediately when app is ready
-  createMenu();
-  boot();
-});
+if (hasSingleInstanceLock) {
+  app.on("ready", () => {
+    // Create menu immediately when app is ready
+    createMenu();
+    boot();
+  });
+}
 
 // Handle any uncaught exceptions
 process.on("uncaughtException", (err) => {
@@ -552,26 +629,28 @@ function killAllSync() {
   console.log("Cleanup complete");
 }
 
-app.on("window-all-closed", () => {
-  // Don't quit on macOS - let before-quit handle it
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+if (hasSingleInstanceLock) {
+  app.on("window-all-closed", () => {
+    // Don't quit on macOS - let before-quit handle it
+    if (process.platform !== "darwin") {
+      app.quit();
+    }
+  });
 
-app.on("before-quit", (event) => {
-  // Prevent default quit to ensure our cleanup runs
-  if (!isShuttingDown) {
-    event.preventDefault();
-    isShuttingDown = true;
+  app.on("before-quit", (event) => {
+    // Prevent default quit to ensure our cleanup runs
+    if (!isShuttingDown) {
+      event.preventDefault();
+      isShuttingDown = true;
 
-    console.log("App shutting down...");
+      console.log("App shutting down...");
 
-    // Kill all processes synchronously - NO ASYNC/AWAIT
-    killAllSync();
+      // Kill all processes synchronously - NO ASYNC/AWAIT
+      killAllSync();
 
-    console.log("Calling process.exit(0)...");
-    // Use process.exit() for hard exit, not app.exit()
-    process.exit(0);
-  }
-});
+      console.log("Calling process.exit(0)...");
+      // Use process.exit() for hard exit, not app.exit()
+      process.exit(0);
+    }
+  });
+}

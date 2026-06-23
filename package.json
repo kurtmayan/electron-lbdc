@@ -1,7 +1,7 @@
 {
   "name": "mrdiy-lbdc",
   "productName": "Mr. DIY - LOCAL",
-  "version": "2.0.0",
+  "version": "2.1.1",
   "description": "Biometrics Data Consolidator",
   "main": ".vite/build/main.js",
   "private": true,
@@ -12,11 +12,12 @@
     "install:all": "npm run install:client && npm run install:server",
     "build:client": "cd ./client && npm run build",
     "build:server": "tsx scripts/build-server.ts",
+    "build:electron": "vite build --config vite.main.config.ts && vite build --config vite.preload.config.ts",
     "build:all": "npm run build:client && npm run build:server",
-    "publish": "electron-builder --publish always",
+    "publish": "npm run build:all && npm run build:electron && electron-builder --publish always",
     "lint": "eslint --ext .ts,.tsx .",
     "preview": "vite preview",
-    "build": "npm run build:all && electron-builder"
+    "build": "npm run build:all && npm run build:electron && electron-builder"
   },
   "keywords": [],
   "author": {
