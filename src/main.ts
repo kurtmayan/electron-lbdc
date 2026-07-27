@@ -1,4 +1,12 @@
-import { app, BrowserWindow, Menu, ipcMain, dialog } from "electron";
+import {
+  app,
+  BrowserWindow,
+  Menu,
+  ipcMain,
+  dialog,
+  Tray,
+  nativeTheme,
+} from "electron";
 import path from "node:path";
 import { spawn, ChildProcess, spawnSync } from "child_process";
 import fs from "fs";
@@ -10,8 +18,11 @@ let expressServer: Server | null = null;
 
 let backendProcess: ChildProcess | null = null;
 let mainWindow: BrowserWindow | null = null;
+let tray: Tray | null = null;
 let isShuttingDown = false; // Flag to prevent multiple shutdown calls
+let isQuitRequested = false;
 let focusWindowWhenReady = false;
+let runAtStartup = true;
 
 // Update tracking
 let updateAvailable = false;
@@ -25,7 +36,20 @@ const BACKEND_HOST = "127.0.0.1";
 const BACKEND_PORT = 63210;
 const IS_WINDOWS = process.platform === "win32";
 const EXECUTABLE_NAME = IS_WINDOWS ? "lbdc_server.exe" : "lbdc_server";
+const BACKGROUND_ARG = "--background";
+const BACKGROUND_SETTINGS_FILE = "background-settings.json";
+const LIGHT_BACKGROUND_COLOR = "#ffffff";
+const ICON_FILE_NAME = process.platform === "darwin" ? "icon.icns" : "icon.ico";
+const ICON_PATH = app.isPackaged
+  ? path.join(process.resourcesPath, "resources", ICON_FILE_NAME)
+  : path.join(app.getAppPath(), "resources", ICON_FILE_NAME);
+const shouldStartHidden = process.argv.includes(BACKGROUND_ARG);
 const hasSingleInstanceLock = app.requestSingleInstanceLock();
+
+nativeTheme.themeSource = "light";
+nativeTheme.on("updated", () => {
+  nativeTheme.themeSource = "light";
+});
 
 if (!hasSingleInstanceLock) {
   app.exit(0);
@@ -50,6 +74,103 @@ function focusMainWindow() {
   }
 
   mainWindow.focus();
+}
+
+function setupBackgroundBehavior() {
+  if (tray) {
+    return;
+  }
+
+  const canManageStartup = IS_WINDOWS && app.isPackaged;
+  const settingsPath = path.join(
+    app.getPath("userData"),
+    BACKGROUND_SETTINGS_FILE,
+  );
+
+  const syncStartupPreference = () => {
+    try {
+      fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+      fs.writeFileSync(
+        settingsPath,
+        JSON.stringify({ runAtStartup }, null, 2),
+        "utf8",
+      );
+    } catch (error) {
+      console.error("Failed to save background settings:", error);
+    }
+
+    if (!canManageStartup) {
+      return;
+    }
+
+    try {
+      app.setLoginItemSettings({
+        openAtLogin: runAtStartup,
+        path: process.execPath,
+        args: [BACKGROUND_ARG],
+        enabled: runAtStartup,
+        name: app.getName(),
+      });
+    } catch (error) {
+      console.error("Failed to update run-at-startup setting:", error);
+    }
+  };
+
+  try {
+    if (fs.existsSync(settingsPath)) {
+      const settings = JSON.parse(fs.readFileSync(settingsPath, "utf8")) as {
+        runAtStartup?: unknown;
+      };
+
+      if (typeof settings.runAtStartup === "boolean") {
+        runAtStartup = settings.runAtStartup;
+      }
+    }
+  } catch (error) {
+    console.error("Failed to load background settings:", error);
+  }
+
+  syncStartupPreference();
+
+  try {
+    tray = new Tray(ICON_PATH);
+    tray.setToolTip("Mr. DIY - LOCAL is running in the background.");
+    tray.on("click", () => {
+      focusMainWindow();
+    });
+
+    tray.setContextMenu(
+      Menu.buildFromTemplate([
+        {
+          label: "Open Mr. DIY - LOCAL",
+          click: () => {
+            focusMainWindow();
+          },
+        },
+        { type: "separator" as const },
+        {
+          label: "Run at Startup",
+          type: "checkbox" as const,
+          checked: runAtStartup,
+          enabled: canManageStartup,
+          click: (menuItem) => {
+            runAtStartup = menuItem.checked;
+            syncStartupPreference();
+          },
+        },
+        { type: "separator" as const },
+        {
+          label: "Quit",
+          click: () => {
+            isQuitRequested = true;
+            app.quit();
+          },
+        },
+      ]),
+    );
+  } catch (error) {
+    console.error("Failed to create tray:", error);
+  }
 }
 
 /**
@@ -321,6 +442,7 @@ function createMenu() {
           label: "Exit",
           accelerator: "CmdOrCtrl+Q",
           click: () => {
+            isQuitRequested = true;
             app.quit();
           },
         },
@@ -489,7 +611,9 @@ function createWindow(frontendUrl: string) {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 900,
-    icon: path.join(__dirname, "../resources/icon.ico"),
+    show: !shouldStartHidden || focusWindowWhenReady,
+    backgroundColor: LIGHT_BACKGROUND_COLOR,
+    icon: ICON_PATH,
   });
 
   mainWindow.loadURL(frontendUrl);
@@ -498,6 +622,15 @@ function createWindow(frontendUrl: string) {
   // if (!app.isPackaged) {
   //   mainWindow.webContents.openDevTools();
   // }
+
+  mainWindow.on("close", (event) => {
+    if (isQuitRequested || isShuttingDown) {
+      return;
+    }
+
+    event.preventDefault();
+    mainWindow?.hide();
+  });
 
   mainWindow.on("closed", () => {
     mainWindow = null;
@@ -545,6 +678,8 @@ async function boot() {
 
 if (hasSingleInstanceLock) {
   app.on("ready", () => {
+    nativeTheme.themeSource = "light";
+    setupBackgroundBehavior();
     // Create menu immediately when app is ready
     createMenu();
     boot();
@@ -631,10 +766,7 @@ function killAllSync() {
 
 if (hasSingleInstanceLock) {
   app.on("window-all-closed", () => {
-    // Don't quit on macOS - let before-quit handle it
-    if (process.platform !== "darwin") {
-      app.quit();
-    }
+    // Keep the process alive so the backend scheduler can continue running.
   });
 
   app.on("before-quit", (event) => {

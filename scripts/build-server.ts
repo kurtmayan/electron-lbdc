@@ -4,9 +4,9 @@ import path from "path";
 
 const isWindows = process.platform === "win32";
 const shell = isWindows ? "cmd.exe" : "/bin/sh";
-const pyInstaller = isWindows
-  ? ".venv\\Scripts\\pyinstaller.exe"
-  : ".venv/bin/pyinstaller";
+const python = isWindows
+  ? ".venv\\Scripts\\python.exe"
+  : ".venv/bin/python";
 const serverDir = path.join(__dirname, "../server");
 const privateKeyRelativePath = path.join("keys", "lbdc_private_key.pem");
 const privateKeyPath = path.join(serverDir, privateKeyRelativePath);
@@ -43,7 +43,7 @@ const hiddenImports = [
   .join(" ");
 
 execSync(
-  `${pyInstaller} --onefile ${hiddenImports} ${privateKeyData} --name lbdc_server app/main.py`,
+  `${python} -m PyInstaller --onefile ${hiddenImports} ${privateKeyData} --name lbdc_server app/main.py`,
   options,
 );
 

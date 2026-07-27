@@ -10,6 +10,12 @@ files:
   - "package.json"
 
 extraResources:
+  - from: "resources/icon.ico"
+    to: "resources/icon.ico"
+
+  - from: "resources/icon.icns"
+    to: "resources/icon.icns"
+
   - from: "server/dist/.env"
     to: "server/dist/.env"
 
